@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Account from './pages/Account'
+import Team from './pages/Team'
 import Layout from './components/Layout'
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
         <Route element={session ? <Layout session={session} /> : <Navigate to="/login" />}>
           <Route index element={<Dashboard />} />
           <Route path="/account/:id" element={<Account />} />
+          <Route path="/team" element={<Team />} />
         </Route>
       </Routes>
     </BrowserRouter>
