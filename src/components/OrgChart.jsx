@@ -102,11 +102,14 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
   }, [accountId])
 
   // Add newly added stakeholders without resetting existing positions
-  useEffect(() => {
+ useEffect(() => {
     let changed = false
     stakeholders.forEach((s, i) => {
       if (!posRef.current[s.id]) {
-        posRef.current[s.id] = { x: 250 + (i % 5) * 230, y: 180 + Math.floor(i / 5) * 190 }
+        posRef.current[s.id] = {
+          x: s.pos_x > 0 ? s.pos_x : 250 + (i % 5) * 230,
+          y: s.pos_y > 0 ? s.pos_y : 180 + Math.floor(i / 5) * 190,
+        }
         changed = true
       }
     })
