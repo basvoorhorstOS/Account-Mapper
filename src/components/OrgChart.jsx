@@ -19,7 +19,6 @@ function StakeholderCard({ s, selected, linkingFrom, pos, onMouseDown, onSingleC
   const isSelected = selected === s.id
   const isFrom = linkingFrom === s.id
 
-  // Distinguish single vs double click
   const clickTimer = useRef(null)
   const handleClick = (e) => {
     e.stopPropagation()
@@ -74,8 +73,9 @@ function StakeholderCard({ s, selected, linkingFrom, pos, onMouseDown, onSingleC
 
 export default function OrgChart({ accountId, userId, stakeholders, onRefresh }) {
   const svgRef = useRef(null)
-  const posRef = useRef({})           // source of truth for positions
-  const [posVer, setPosVer] = useState(0) // increment to trigger re-render
+  const posRef = useRef({})
+  const saveTimerRef = useRef({})  // debounce timers per stakeholder
+  const [posVer, setPosVer] = useState(0)
   const [rels, setRels] = useState([])
   const [dragging, setDragging] = useState(null)
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
@@ -88,7 +88,6 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
   const [panning, setPanning] = useState(false)
   const panStart = useRef({ mx: 0, my: 0, vx: 0, vy: 0 })
 
-  // Load positions from DB once per accountId
   useEffect(() => {
     posRef.current = {}
     stakeholders.forEach((s, i) => {
@@ -101,8 +100,7 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     fetchRels()
   }, [accountId])
 
-  // Add newly added stakeholders without resetting existing positions
- useEffect(() => {
+  useEffect(() => {
     let changed = false
     stakeholders.forEach((s, i) => {
       if (!posRef.current[s.id]) {
@@ -121,6 +119,16 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     setRels(data || [])
   }
 
+  // Save position to Supabase with debounce — fires 600ms after last move
+  const savePosition = useCallback((id, x, y) => {
+    if (saveTimerRef.current[id]) clearTimeout(saveTimerRef.current[id])
+    saveTimerRef.current[id] = setTimeout(async () => {
+      await supabase.from('stakeholders')
+        .update({ pos_x: Math.round(x), pos_y: Math.round(y) })
+        .eq('id', id)
+    }, 600)
+  }, [])
+
   const clientToCanvas = useCallback((cx, cy) => {
     const rect = svgRef.current.getBoundingClientRect()
     return {
@@ -129,7 +137,6 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     }
   }, [view])
 
-  // ── Node drag ────────────────────────────────────────────────────
   const onNodeMouseDown = useCallback((e, id) => {
     e.stopPropagation()
     if (linkingFrom && linkingFrom !== '__pick__') return
@@ -141,7 +148,6 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     setDragOffset({ x: pt.x - pos.x, y: pt.y - pos.y })
   }, [linkingFrom, clientToCanvas])
 
-  // ── SVG events ───────────────────────────────────────────────────
   const onSVGMouseDown = (e) => {
     if (e.currentTarget === e.target) {
       setSelected(null); setDetail(null)
@@ -166,20 +172,25 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     const y = Math.max(CARD_H / 2, pt.y - dragOffset.y)
     posRef.current[dragging] = { x, y }
     setPosVer(v => v + 1)
-  }, [panning, dragging, dragOffset, clientToCanvas])
+    // Save to Supabase with debounce while dragging
+    savePosition(dragging, x, y)
+  }, [panning, dragging, dragOffset, clientToCanvas, savePosition])
 
-  const onSVGMouseUp = useCallback(async () => {
+  const onSVGMouseUp = useCallback(() => {
+    // Also save immediately on mouse up to ensure position is stored
     if (dragging && hasDragged) {
       const pos = posRef.current[dragging]
-      if (pos) await supabase.from('stakeholders')
-        .update({ pos_x: Math.round(pos.x), pos_y: Math.round(pos.y) })
-        .eq('id', dragging)
+      if (pos) {
+        if (saveTimerRef.current[dragging]) clearTimeout(saveTimerRef.current[dragging])
+        supabase.from('stakeholders')
+          .update({ pos_x: Math.round(pos.x), pos_y: Math.round(pos.y) })
+          .eq('id', dragging)
+      }
     }
     setDragging(null)
     setPanning(false)
   }, [dragging, hasDragged])
 
-  // ── Zoom ─────────────────────────────────────────────────────────
   const onWheel = useCallback((e) => {
     e.preventDefault()
     const rect = svgRef.current.getBoundingClientRect()
@@ -203,12 +214,10 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     return () => el.removeEventListener('wheel', onWheel)
   }, [onWheel])
 
-  // ── Linking ──────────────────────────────────────────────────────
   const onNodeSingleClick = useCallback((e, id) => {
     if (!linkingFrom) { setSelected(id); return }
     if (linkingFrom === '__pick__') { setLinkingFrom(id); return }
     if (linkingFrom === id) { setLinkingFrom(null); return }
-    // Create relationship
     supabase.from('relationships').insert({
       account_id: accountId, user_id: userId,
       from_id: linkingFrom, to_id: id, type: linkType,
@@ -230,7 +239,6 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
 
   return (
     <div style={{ position: 'relative' }}>
-      {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12, color: '#4A5568', fontWeight: 500 }}>Relatie:</span>
         {[['knows', '🤝 Kent', '#4CAF50'], ['influences', '⚡ Beïnvloedt', '#1A56FF']].map(([t, label, color]) => (
@@ -254,7 +262,6 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
         </div>
       </div>
 
-      {/* Canvas */}
       <div style={{ border: '1px solid #E2DFD5', borderRadius: 8, overflow: 'hidden', background: '#F8F7F4', height: 600 }}>
         <svg ref={svgRef} width="100%" height="100%"
           style={{ cursor: panning ? 'grabbing' : dragging ? 'grabbing' : 'default', display: 'block' }}
@@ -304,7 +311,6 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
         </svg>
       </div>
 
-      {/* Legend */}
       <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 11, color: '#8A96A8', flexWrap: 'wrap', alignItems: 'center' }}>
         {Object.entries(SENTIMENT_COLOR).map(([k, v]) => (
           <span key={k} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -313,7 +319,6 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
         ))}
       </div>
 
-      {/* Detail panel */}
       {detail && (
         <div style={{ position: 'fixed', right: 24, top: 80, width: 280, background: 'white', border: '1px solid #E2DFD5', borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', zIndex: 300, overflow: 'hidden' }}>
           <div style={{ height: 6, background: SENTIMENT_COLOR[detail.sentiment] || '#8A96A8' }} />
