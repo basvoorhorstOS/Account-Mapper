@@ -79,7 +79,7 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
   const [rels, setRels] = useState([])
   const [dragging, setDragging] = useState(null)
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
-  const [hasDragged, setHasDragged] = useState(false)
+  const hasDraggedRef = useRef(false)
   const [selected, setSelected] = useState(null)
   const [linkingFrom, setLinkingFrom] = useState(null)
   const [linkType, setLinkType] = useState('knows')
@@ -142,7 +142,7 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     if (linkingFrom && linkingFrom !== '__pick__') return
     setDragging(id)
     setSelected(id)
-    setHasDragged(false)
+    hasDraggedRef.current = false
     const pt = clientToCanvas(e.clientX, e.clientY)
     const pos = posRef.current[id] || { x: 0, y: 0 }
     setDragOffset({ x: pt.x - pos.x, y: pt.y - pos.y })
@@ -166,7 +166,7 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
       return
     }
     if (!dragging) return
-    setHasDragged(true)
+    hasDraggedRef.current = true
     const pt = clientToCanvas(e.clientX, e.clientY)
     const x = Math.max(CARD_W / 2, pt.x - dragOffset.x)
     const y = Math.max(CARD_H / 2, pt.y - dragOffset.y)
@@ -178,7 +178,7 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
 
   const onSVGMouseUp = useCallback(() => {
     // Also save immediately on mouse up to ensure position is stored
-    if (dragging && hasDragged) {
+    if (dragging && hasDraggedRef.current) {
       const pos = posRef.current[dragging]
       if (pos) {
         if (saveTimerRef.current[dragging]) clearTimeout(saveTimerRef.current[dragging])
