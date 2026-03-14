@@ -74,18 +74,20 @@ function StakeholderCard({ s, selected, linkingFrom, pos, onMouseDown, onSingleC
 export default function OrgChart({ accountId, userId, stakeholders, onRefresh }) {
   const svgRef = useRef(null)
   const posRef = useRef({})
-  const saveTimerRef = useRef({})  // debounce timers per stakeholder
+  const draggingRef = useRef(null)
+  const hasDraggedRef = useRef(false)
+  const dragOffsetRef = useRef({ x: 0, y: 0 })
   const [posVer, setPosVer] = useState(0)
   const [rels, setRels] = useState([])
-  const [dragging, setDragging] = useState(null)
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
-  const hasDraggedRef = useRef(false)
+  const [draggingState, setDraggingState] = useState(null)
   const [selected, setSelected] = useState(null)
   const [linkingFrom, setLinkingFrom] = useState(null)
   const [linkType, setLinkType] = useState('knows')
   const [detail, setDetail] = useState(null)
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
+  const viewRef = useRef({ x: 0, y: 0, scale: 1 })
   const [panning, setPanning] = useState(false)
+  const panningRef = useRef(false)
   const panStart = useRef({ mx: 0, my: 0, vx: 0, vy: 0 })
 
   useEffect(() => {
@@ -119,77 +121,77 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     setRels(data || [])
   }
 
-  // Save position to Supabase with debounce — fires 600ms after last move
-  const savePosition = useCallback((id, x, y) => {
-    if (saveTimerRef.current[id]) clearTimeout(saveTimerRef.current[id])
-    saveTimerRef.current[id] = setTimeout(async () => {
-      await supabase.from('stakeholders')
-        .update({ pos_x: Math.round(x), pos_y: Math.round(y) })
-        .eq('id', id)
-    }, 600)
-  }, [])
+  const savePos = async (id, x, y) => {
+    const { error } = await supabase.from('stakeholders')
+      .update({ pos_x: Math.round(x), pos_y: Math.round(y) })
+      .eq('id', id)
+    if (error) console.error('savePos error:', error)
+    else console.log('saved', id, Math.round(x), Math.round(y))
+  }
 
-  const clientToCanvas = useCallback((cx, cy) => {
+  const clientToCanvas = (cx, cy) => {
     const rect = svgRef.current.getBoundingClientRect()
+    const v = viewRef.current
     return {
-      x: view.x + (cx - rect.left) / view.scale,
-      y: view.y + (cy - rect.top) / view.scale,
+      x: v.x + (cx - rect.left) / v.scale,
+      y: v.y + (cy - rect.top) / v.scale,
     }
-  }, [view])
+  }
 
-  const onNodeMouseDown = useCallback((e, id) => {
+  const onNodeMouseDown = (e, id) => {
     e.stopPropagation()
     if (linkingFrom && linkingFrom !== '__pick__') return
-    setDragging(id)
-    setSelected(id)
+    draggingRef.current = id
     hasDraggedRef.current = false
+    setDraggingState(id)
+    setSelected(id)
     const pt = clientToCanvas(e.clientX, e.clientY)
     const pos = posRef.current[id] || { x: 0, y: 0 }
-    setDragOffset({ x: pt.x - pos.x, y: pt.y - pos.y })
-  }, [linkingFrom, clientToCanvas])
+    dragOffsetRef.current = { x: pt.x - pos.x, y: pt.y - pos.y }
+  }
 
   const onSVGMouseDown = (e) => {
     if (e.currentTarget === e.target) {
       setSelected(null); setDetail(null)
+      panningRef.current = true
       setPanning(true)
-      panStart.current = { mx: e.clientX, my: e.clientY, vx: view.x, vy: view.y }
+      panStart.current = { mx: e.clientX, my: e.clientY, vx: viewRef.current.x, vy: viewRef.current.y }
     }
   }
 
-  const onSVGMouseMove = useCallback((e) => {
-    if (panning) {
-      setView(v => ({
+  const onSVGMouseMove = (e) => {
+    if (panningRef.current) {
+      const v = viewRef.current
+      const newView = {
         ...v,
         x: panStart.current.vx - (e.clientX - panStart.current.mx) / v.scale,
         y: panStart.current.vy - (e.clientY - panStart.current.my) / v.scale,
-      }))
+      }
+      viewRef.current = newView
+      setView({ ...newView })
       return
     }
-    if (!dragging) return
+    if (!draggingRef.current) return
     hasDraggedRef.current = true
     const pt = clientToCanvas(e.clientX, e.clientY)
-    const x = Math.max(CARD_W / 2, pt.x - dragOffset.x)
-    const y = Math.max(CARD_H / 2, pt.y - dragOffset.y)
-    posRef.current[dragging] = { x, y }
+    const x = Math.max(CARD_W / 2, pt.x - dragOffsetRef.current.x)
+    const y = Math.max(CARD_H / 2, pt.y - dragOffsetRef.current.y)
+    posRef.current[draggingRef.current] = { x, y }
     setPosVer(v => v + 1)
-    // Save to Supabase with debounce while dragging
-    savePosition(dragging, x, y)
-  }, [panning, dragging, dragOffset, clientToCanvas, savePosition])
+  }
 
-  const onSVGMouseUp = useCallback(() => {
-    // Also save immediately on mouse up to ensure position is stored
-    if (dragging && hasDraggedRef.current) {
-      const pos = posRef.current[dragging]
-      if (pos) {
-        if (saveTimerRef.current[dragging]) clearTimeout(saveTimerRef.current[dragging])
-        supabase.from('stakeholders')
-          .update({ pos_x: Math.round(pos.x), pos_y: Math.round(pos.y) })
-          .eq('id', dragging)
-      }
+  const onSVGMouseUp = () => {
+    if (draggingRef.current && hasDraggedRef.current) {
+      const id = draggingRef.current
+      const pos = posRef.current[id]
+      if (pos) savePos(id, pos.x, pos.y)
     }
-    setDragging(null)
+    draggingRef.current = null
+    hasDraggedRef.current = false
+    panningRef.current = false
+    setDraggingState(null)
     setPanning(false)
-  }, [dragging, hasDragged])
+  }
 
   const onWheel = useCallback((e) => {
     e.preventDefault()
@@ -199,11 +201,13 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
     setView(v => {
       const newScale = Math.min(4, Math.max(0.15, v.scale * factor))
-      return {
+      const newView = {
         x: v.x + mx / v.scale - mx / newScale,
         y: v.y + my / v.scale - my / newScale,
         scale: newScale,
       }
+      viewRef.current = newView
+      return newView
     })
   }, [])
 
@@ -214,7 +218,8 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
     return () => el.removeEventListener('wheel', onWheel)
   }, [onWheel])
 
-  const onNodeSingleClick = useCallback((e, id) => {
+  const onNodeSingleClick = (e, id) => {
+    if (hasDraggedRef.current) return
     if (!linkingFrom) { setSelected(id); return }
     if (linkingFrom === '__pick__') { setLinkingFrom(id); return }
     if (linkingFrom === id) { setLinkingFrom(null); return }
@@ -222,12 +227,12 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
       account_id: accountId, user_id: userId,
       from_id: linkingFrom, to_id: id, type: linkType,
     }).then(() => { setLinkingFrom(null); fetchRels() })
-  }, [linkingFrom, linkType, accountId, userId])
+  }
 
-  const onNodeDoubleClick = useCallback((e, id) => {
-    if (hasDragged) return
+  const onNodeDoubleClick = (e, id) => {
+    if (hasDraggedRef.current) return
     setDetail(stakeholders.find(s => s.id === id) || null)
-  }, [stakeholders, hasDragged])
+  }
 
   const deleteRel = async (id) => {
     await supabase.from('relationships').delete().eq('id', id)
@@ -255,7 +260,7 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 11, color: '#8A96A8' }}>Scroll = zoom &nbsp;|&nbsp; Sleep achtergrond = pannen &nbsp;|&nbsp; Dubbelklik = details</span>
-          <button onClick={() => setView({ x: 0, y: 0, scale: 1 })}
+          <button onClick={() => { const v = { x: 0, y: 0, scale: 1 }; viewRef.current = v; setView(v) }}
             style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #E2DFD5', borderRadius: 6, background: 'white', cursor: 'pointer', color: '#4A5568' }}>
             ⟳ Reset
           </button>
@@ -264,7 +269,7 @@ export default function OrgChart({ accountId, userId, stakeholders, onRefresh })
 
       <div style={{ border: '1px solid #E2DFD5', borderRadius: 8, overflow: 'hidden', background: '#F8F7F4', height: 600 }}>
         <svg ref={svgRef} width="100%" height="100%"
-          style={{ cursor: panning ? 'grabbing' : dragging ? 'grabbing' : 'default', display: 'block' }}
+          style={{ cursor: panning ? 'grabbing' : draggingState ? 'grabbing' : 'default', display: 'block' }}
           onMouseDown={onSVGMouseDown}
           onMouseMove={onSVGMouseMove}
           onMouseUp={onSVGMouseUp}
